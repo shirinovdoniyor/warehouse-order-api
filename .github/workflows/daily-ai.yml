@@ -1,0 +1,135 @@
+name: Daily AI development
+on:
+  schedule:
+    - cron: '7,27,47 3-16 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: warehouse-main-writer
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      day: ${{ steps.plan.outputs.day }}
+      base: ${{ steps.base.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: plan
+        env:
+          AI_ENABLED: ${{ vars.AI_ENABLED }}
+        run: python automation/schedule.py
+  develop:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: warehouse_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d warehouse_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://test:test@localhost:5432/warehouse_test
+    outputs:
+      changed: ${{ steps.patch.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.base }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies and baseline tests
+        run: |
+          pip install -r requirements.txt
+          python -m pytest -q
+          cp automation/prepare_patch.py /tmp/trusted_prepare_patch.py
+      - name: Implement one feature
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          prompt: |
+            Read AGENTS.md, TASKS.md and existing code. Implement ONLY the first
+            unchecked task as a small working increment. Add meaningful tests
+            and an Uzbek learning note. Run python -m pytest -q. Mark that one
+            task done only if complete. Do not commit or push. Do not modify
+            automation, workflow, dependencies or configuration. If blocked,
+            leave the checkout unchanged and explain the blocker.
+      - name: Verify changes and prepare patch
+        id: patch
+        env:
+          BASE_SHA: ${{ needs.plan.outputs.base }}
+        run: |
+          python /tmp/trusted_prepare_patch.py "$BASE_SHA"
+          python -m pytest -q
+          python -m compileall -q app
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tested-feature
+          path: |
+            /tmp/feature.patch
+            /tmp/commit-message.txt
+          retention-days: 7
+  publish:
+    needs: [plan, develop]
+    if: needs.develop.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: tested-feature
+          path: /tmp/tested-feature
+      - name: Publish tested increment
+        env:
+          BASE_SHA: ${{ needs.plan.outputs.base }}
+          PLAN_DAY: ${{ needs.plan.outputs.day }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$BASE_SHA" || { echo 'main changed; refusing stale patch'; exit 1; }
+          git apply --index /tmp/tested-feature/feature.patch
+          python - <<'PYTHON'
+          import json, os
+          from datetime import datetime
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+          now = datetime.now(ZoneInfo('Asia/Tashkent'))
+          assert now.date().isoformat() == os.environ['PLAN_DAY'], 'Date changed; retry on next run'
+          p = Path('automation/state.json')
+          state = json.loads(p.read_text())
+          state['runs'].append({'day': os.environ['PLAN_DAY'], 'run_id': os.environ['RUN_ID'], 'at': now.isoformat()})
+          state['runs'] = state['runs'][-500:]
+          p.write_text(json.dumps(state, indent=2) + '\n')
+          PYTHON
+          git config user.name 'warehouse-ai[bot]'
+          git config user.email 'warehouse-ai[bot]@users.noreply.github.com'
+          git add automation/state.json
+          git commit -F /tmp/tested-feature/commit-message.txt
+          git push origin HEAD:main
+          echo 'Published one tested AI-assisted feature to main.' >> "$GITHUB_STEP_SUMMARY"
