@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       run: ${{ steps.plan.outputs.run }}
@@ -93,7 +93,7 @@ jobs:
   publish:
     needs: [plan, develop]
     if: needs.develop.outputs.changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: write
