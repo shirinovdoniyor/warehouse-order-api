@@ -35,4 +35,4 @@ assert new == expected, "Only the first pending checkbox can be completed"
 for line in git("diff", "--cached", "--raw", base).decode().splitlines():
     assert line.split()[1] not in ("120000", "160000")
 Path("/tmp/feature.patch").write_bytes(git("diff", "--cached", "--binary", base))
-Path("/tmp/commit-message.txt").write_text("feat: " + match.group(1) + "\n\nAI-assisted implementation using OpenAI Codex.\n")
+Path("/tmp/commit-message.txt").write_text("feat: " + match.group(1) + "\n\nAI-assisted implementation using Google Gemini.\n")

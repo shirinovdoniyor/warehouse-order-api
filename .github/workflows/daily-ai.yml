@@ -1,6 +1,3 @@
-
-    
-  
 name: Daily AI development
 on:
   schedule:
@@ -64,41 +61,23 @@ jobs:
           pip install -r requirements.txt
           python -m pytest -q
           cp automation/prepare_patch.py /tmp/trusted_prepare_patch.py
-      - name: Prepare Codex user
-        run: |
-          sudo adduser --system --home /home/codexworker --shell /bin/bash --group codexworker
-          sudo usermod -a -G runner codexworker
-          sudo chown -R codexworker:codexworker "$GITHUB_WORKSPACE"
-          sudo -u codexworker test -r "$GITHUB_WORKSPACE/AGENTS.md"
-          sudo -u codexworker test -w "$GITHUB_WORKSPACE"
-      - name: Implement one feature
-        uses: openai/codex-action@v1
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          sandbox: workspace-write
-          safety-strategy: unprivileged-user
-          codex-user: codexworker
-          prompt: |
-            Read AGENTS.md, TASKS.md and existing code. Implement ONLY the first
-            unchecked task as a small working increment. Add meaningful tests
-            and an Uzbek learning note. Run python -m pytest -q. Mark that one
-            task done only if complete. Do not commit or push. Do not modify
-            automation, workflow, dependencies or configuration. If blocked,
-            leave the checkout unchanged and explain the blocker.
+      - name: Implement one feature with Gemini
+        id: generate
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python -I automation/gemini_develop.py
       - name: Verify changes and prepare patch
         id: patch
+        if: steps.generate.outputs.changed == 'true'
         env:
           BASE_SHA: ${{ needs.plan.outputs.base }}
         run: |
-          sudo chown -hR runner:runner "$GITHUB_WORKSPACE"
-          sudo chmod -R u+rwX "$GITHUB_WORKSPACE"
           python /tmp/trusted_prepare_patch.py "$BASE_SHA"
           python -m pytest -q
           python -m compileall -q app
           echo 'changed=true' >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
-
-
+        if: steps.patch.outputs.changed == 'true'
         with:
           name: tested-feature
           path: |
@@ -106,7 +85,6 @@ jobs:
             /tmp/commit-message.txt
           retention-days: 7
           if-no-files-found: error
-
   publish:
     needs: [plan, develop]
     if: needs.develop.outputs.changed == 'true'
@@ -119,12 +97,10 @@ jobs:
         with:
           ref: main
           fetch-depth: 1
-
       - uses: actions/download-artifact@v4
         with:
           name: tested-feature
           path: /tmp/tested-feature
-
       - name: Publish tested increment
         env:
           BASE_SHA: ${{ needs.plan.outputs.base }}
@@ -133,32 +109,22 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$BASE_SHA" || { echo 'main changed; refusing stale patch'; exit 1; }
           git apply --index /tmp/tested-feature/feature.patch
-
           python - <<'PYTHON'
-          import json
-          import os
+          import json, os
           from datetime import datetime
           from pathlib import Path
           from zoneinfo import ZoneInfo
-
           now = datetime.now(ZoneInfo('Asia/Tashkent'))
           assert now.date().isoformat() == os.environ['PLAN_DAY'], 'Date changed; retry on next run'
-
           p = Path('automation/state.json')
           state = json.loads(p.read_text())
-          state['runs'].append({
-              'day': os.environ['PLAN_DAY'],
-              'run_id': os.environ['RUN_ID'],
-              'at': now.isoformat(),
-          })
+          state['runs'].append({'day': os.environ['PLAN_DAY'], 'run_id': os.environ['RUN_ID'], 'at': now.isoformat()})
           state['runs'] = state['runs'][-500:]
           p.write_text(json.dumps(state, indent=2) + '\n')
           PYTHON
-
           git config user.name 'warehouse-ai[bot]'
           git config user.email 'warehouse-ai[bot]@users.noreply.github.com'
           git add automation/state.json
           git commit -F /tmp/tested-feature/commit-message.txt
           git push origin HEAD:main
           echo 'Published one tested AI-assisted feature to main.' >> "$GITHUB_STEP_SUMMARY"
-
