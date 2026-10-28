@@ -8,6 +8,8 @@ Built incrementally using OpenAI Codex. The owner studies and reviews changes.
 - OpenAPI documentation at /docs
 - Automated tests and an ordered roadmap
 - Scheduled, tested feature increments with Uzbek learning notes
+- Configuration management (Pydantic Settings) and SQLAlchemy 2 session setup
+- Isolated SQLite test database support for rapid local integration testing
 
 Authentication, inventory and orders are planned, not yet implemented.
 

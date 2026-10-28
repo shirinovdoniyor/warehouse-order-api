@@ -2,7 +2,7 @@
 
 One checkbox = one tested commit and push. Do not skip prerequisites.
 
-- [ ] 01. Configuration and SQLAlchemy session setup; PostgreSQL URL from environment, isolated SQLite test database
+- [x] 01. Configuration and SQLAlchemy session setup; PostgreSQL URL from environment, isolated SQLite test database
 - [ ] 02. User model and Alembic initial migration; unique normalized email, password hash, timestamps
 - [ ] 03. Password hashing service with Argon2 and verification tests
 - [ ] 04. Registration API with email validation, duplicate handling and password hashing
